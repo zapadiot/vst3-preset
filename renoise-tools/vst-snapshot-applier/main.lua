@@ -116,7 +116,23 @@ end
 local function apply_snapshot()
   local song = renoise.song()
 
-  -- 1. Find the first VST instrument in the song
+  -- 1. Prompt user to select a snapshot file
+  local chosen = renoise.app():prompt_for_filename({
+    title = "Select VST snapshot file",
+    path = SNAPSHOT_PATH,
+    extensions = { "txt", "preset", "snapshot" },
+  })
+  if not chosen or chosen == "" then
+    renoise.app():show_prompt(
+      "VST Snapshot Applier",
+      "No snapshot file selected.",
+      {"OK"}
+    )
+    return
+  end
+  local snapshot_path = chosen
+
+  -- 2. Find the first VST instrument in the song
   local target_instr = nil
   for _, instr in ipairs(song.instruments) do
     if instr.type == renoise.Instrument.TYPE_PLUGIN then
@@ -148,7 +164,7 @@ local function apply_snapshot()
   end
 
   -- 3. Parse snapshot
-  local entries, err = parse_snapshot(SNAPSHOT_PATH)
+  local entries, err = parse_snapshot(snapshot_path)
   if not entries then
     renoise.app():show_prompt("VST Snapshot Applier", err, {"OK"})
     return
