@@ -71,7 +71,7 @@ class VstParamTui(App[None]):
         padding: 0 1;
     }
     #set-panel {
-        height: 8;
+        height: 10;
         dock: bottom;
         layout: horizontal;
         border: solid cyan;
@@ -149,6 +149,8 @@ class VstParamTui(App[None]):
             yield Input(placeholder="param ID (decimal or 0x hex)", id="set-id")
             yield Input(placeholder="normalized value 0..1", id="set-value")
             yield Button("Set", id="set-param", variant="success")
+            yield Button("Save snapshot", id="save-snapshot", variant="default")
+            yield Button("Load snapshot", id="load-snapshot", variant="default")
             yield Static(id="set-result", classes="result")
             yield Label("Apply research overrides", classes="panel-title")
             yield Input(
@@ -358,6 +360,10 @@ class VstParamTui(App[None]):
         bid = event.button.id
         if bid == "set-param":
             self._do_set_param()
+        elif bid == "save-snapshot":
+            self.action_save_snapshot()
+        elif bid == "load-snapshot":
+            self.action_load_snapshot()
         elif bid == "research-preset":
             self._do_research_preset()
         elif bid == "apply-overrides":
