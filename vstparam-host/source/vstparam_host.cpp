@@ -17,6 +17,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace Steinberg;
 using namespace Vst;
@@ -47,37 +49,46 @@ int main (int argc, char* argv[])
 {
     if (argc < 2)
     {
-        std::cerr << "usage: vstparam_host <path-to-vst3-or-bundle> [--set <id> <norm>]"
+        std::cerr << "usage: vstparam_host <path-to-vst3-or-bundle> [--set <id> <norm> ...]"
                   << " [--save <file>] [--load <file>]" << std::endl;
         return 2;
     }
 
     const std::string path (argv[1]);
-    bool doSet = false;
     bool doSave = false;
     bool doLoad = false;
-    std::string setIdStr;
     std::string savePath;
     std::string loadPath;
-    double setValue = 0.0;
+    std::vector<std::pair<std::string, double>> setPairs;
     if (argc > 2)
     {
-        std::string mode (argv[2]);
-        if (mode == "--set")
+        int i = 2;
+        while (i < argc)
         {
-            doSet = true;
-            setIdStr = argv[3];
-            setValue = std::atof (argv[4]);
-        }
-        else if (mode == "--save")
-        {
-            doSave = true;
-            savePath = argv[3];
-        }
-        else if (mode == "--load")
-        {
-            doLoad = true;
-            loadPath = argv[3];
+            std::string mode (argv[i]);
+            if (mode == "--set" && i + 2 < argc)
+            {
+                setPairs.emplace_back (argv[i + 1], std::atof (argv[i + 2]));
+                i += 3;
+            }
+            else if (mode == "--save" && i + 1 < argc)
+            {
+                doSave = true;
+                savePath = argv[i + 1];
+                i += 2;
+            }
+            else if (mode == "--load" && i + 1 < argc)
+            {
+                doLoad = true;
+                loadPath = argv[i + 1];
+                i += 2;
+            }
+            else
+            {
+                std::cerr << "vstparam_host: unknown or incomplete argument: "
+                          << mode << std::endl;
+                return 2;
+            }
         }
     }
 
@@ -123,26 +134,34 @@ int main (int argc, char* argv[])
 
         int32 parameterCount = controller->getParameterCount ();
 
-        if (doSet)
+        if (!setPairs.empty ())
         {
-            long long targetId = std::strtoll (setIdStr.c_str (), nullptr, 0);
-            for (int32 i = 0; i < parameterCount; ++i)
+            for (const auto& sp : setPairs)
             {
-                Vst::ParameterInfo info;
-                if (controller->getParameterInfo (i, info) != kResultTrue)
-                    continue;
-                if ((long long) info.id != targetId)
-                    continue;
+                long long targetId = std::strtoll (sp.first.c_str (), nullptr, 0);
+                bool found = false;
+                for (int32 i = 0; i < parameterCount; ++i)
+                {
+                    Vst::ParameterInfo info;
+                    if (controller->getParameterInfo (i, info) != kResultTrue)
+                        continue;
+                    if ((long long) info.id != targetId)
+                        continue;
 
-                Vst::ParamValue value = static_cast<Vst::ParamValue> (setValue);
-                tresult r = controller->setParamNormalized (info.id, value);
-                Vst::ParamValue readback = controller->getParamNormalized (info.id);
-                std::cout << "[ " << i << "] id=0x" << std::hex << info.id << std::dec
-                          << " " << toUtf8 (info.title) << " set -> value=" << setValue
-                          << " readback=" << readback << " ret=" << r << std::endl;
+                    Vst::ParamValue value = static_cast<Vst::ParamValue> (sp.second);
+                    tresult r = controller->setParamNormalized (info.id, value);
+                    Vst::ParamValue readback = controller->getParamNormalized (info.id);
+                    std::cout << "[ " << i << "] id=0x" << std::hex << info.id << std::dec
+                              << " " << toUtf8 (info.title) << " set -> value=" << sp.second
+                              << " readback=" << readback << " ret=" << r << std::endl;
+                    found = true;
+                }
+                if (!found)
+                {
+                    std::cerr << "vstparam_host: parameter id " << sp.first
+                              << " not found" << std::endl;
+                }
             }
-            controller->release ();
-            return 0;
         }
 
         if (doSave)

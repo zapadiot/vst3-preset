@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
 """vst_tui — Textual TUI for vstparam_host.
 
-Lists VST3 parameters, lets you set/save/load snapshots, and includes a
-prompt/research area plus a preview placeholder for MIDI replay.
+Lists VST3 parameters, lets you set/save/load snapshots, and wires a
+prompt/research area that searches the web for preset tutorials and lets
+you apply discovered parameter values.
+
+Preview / audio: vstparam_host is a parameter-control host (no audio
+rendering engine). To actually *hear* the plugin, load it in a DAW/audio
+host (Carla, Bitwig, Ardour, …) and use this TUI to tweak parameters in
+real time.
 """
 
 from __future__ import annotations
 
+import html
 import os
 import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from typing import Optional
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Vertical, ScrollableContainer
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
-from textual.binding import Binding
 
 
 VSTPARAM_HOST = os.environ.get("VSTPARAM_HOST", "vstparam_host")
 DEFAULT_SNAPSHOT = "/tmp/vst-snapshot.txt"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) vst-tui/0.1"
 
 
 class VstParamTui(App[None]):
@@ -61,7 +71,7 @@ class VstParamTui(App[None]):
         padding: 0 1;
     }
     #set-panel {
-        height: 7;
+        height: 8;
         dock: bottom;
         layout: horizontal;
         border: solid cyan;
@@ -74,6 +84,9 @@ class VstParamTui(App[None]):
     .result {
         height: 1fr;
         overflow: auto;
+    }
+    .muted {
+        color: $text-muted;
     }
     """
 
@@ -103,24 +116,31 @@ class VstParamTui(App[None]):
                 with Vertical(id="prompt-area"):
                     yield Label("Prompt / preset research", classes="panel-title")
                     yield Input(
-                        placeholder="e.g. make this warmer / brighter ...",
+                        placeholder='e.g. "warm vocal EQ settings"',
                         id="prompt-input",
                     )
                     yield Button(
-                        "Apply research notes",
-                        id="apply-prompt",
+                        "Research preset",
+                        id="research-preset",
                         variant="primary",
                     )
-                    yield Static(id="prompt-result", classes="result")
+                    yield Static(id="research-result", classes="result")
 
                 with Vertical(id="preview-area"):
                     yield Label(
                         "Preview / MIDI replay (placeholder)", classes="panel-title"
                     )
-                    yield Static(id="preview-content", classes="result")
+                    yield Static(
+                        "Audio preview is not available from this host:\n"
+                        "vstparam_host controls parameters only; it does not\n"
+                        "render audio. Load the plugin in a DAW (Carla,\n"
+                        "Bitwig, Ardour…) and tweak parameters here.\n",
+                        id="preview-content",
+                        classes="result muted",
+                    )
                     yield Button(
-                        "Play test note (needs synth)",
-                        id="play-note",
+                        "Open plugin in DAW (note only)",
+                        id="daw-note",
                         variant="default",
                     )
 
@@ -130,6 +150,13 @@ class VstParamTui(App[None]):
             yield Input(placeholder="normalized value 0..1", id="set-value")
             yield Button("Set", id="set-param", variant="success")
             yield Static(id="set-result", classes="result")
+            yield Label("Apply research overrides", classes="panel-title")
+            yield Input(
+                placeholder="id=value,id=value (e.g. 1336600346=0.75,0x1b09d=0.4)",
+                id="override-input",
+            )
+            yield Button("Apply overrides", id="apply-overrides", variant="default")
+            yield Static(id="override-result", classes="result")
 
         yield Footer()
 
@@ -219,6 +246,77 @@ class VstParamTui(App[None]):
         return params
 
     # ------------------------------------------------------------------ #
+    # Web research (prompt wiring)
+    # ------------------------------------------------------------------ #
+    def _fetch_url(self, url: str, timeout: int = 20, max_bytes: int = 2_000_000):
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            raw = resp.read(max_bytes + 1)
+            truncated = len(raw) > max_bytes
+            if truncated:
+                raw = raw[:max_bytes]
+            charset = "utf-8"
+            m = re.search(r"charset=([^\s;]+)", ctype, re.I)
+            if m:
+                charset = m.group(1).strip("'\" ")
+            try:
+                text = raw.decode(charset, errors="replace")
+            except Exception:
+                text = raw.decode("utf-8", errors="replace")
+        return text, (" (truncated)" if truncated else "")
+
+    def _extract_text(self, html_text: str) -> str:
+        # crude strip of tags + whitespace collapse
+        text = re.sub(r"<script[^>]*>.*?</script>", " ", html_text, flags=re.I | re.S)
+        text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _ddg_search(self, query: str, max_results: int = 8) -> list[dict]:
+        url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+        try:
+            text, _ = self._fetch_url(url, timeout=20)
+        except Exception:
+            return []
+
+        # DuckDuckGo often serves an anomaly/CAPTCHA page to headless clients.
+        if "anomaly-modal" in text or "challenge-form" in text:
+            raise RuntimeError("DuckDuckGo CAPTCHA/anomaly page — direct scraping blocked")
+
+        results = []
+        for m in re.finditer(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            text,
+            re.I | re.S,
+        ):
+            href = html.unescape(m.group(1))
+            title = re.sub(r"<[^>]+>", "", m.group(2))
+            title = html.unescape(title).strip()
+            if "uddg=" in href:
+                try:
+                    parsed = urllib.parse.urlparse(href)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    if "uddg" in qs:
+                        href = qs["uddg"][0]
+                except Exception:
+                    pass
+            results.append({"title": title, "url": href})
+            if len(results) >= max_results:
+                break
+
+        snippets = re.findall(
+            r'class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', text, re.I | re.S
+        )
+        for i, sn in enumerate(snippets[: len(results)]):
+            results[i]["snippet"] = html.unescape(
+                re.sub(r"<[^>]+>", "", sn)
+            ).strip()
+        return results
+
+    # ------------------------------------------------------------------ #
     # Actions
     # ------------------------------------------------------------------ #
     def action_refresh_params(self) -> None:
@@ -260,10 +358,12 @@ class VstParamTui(App[None]):
         bid = event.button.id
         if bid == "set-param":
             self._do_set_param()
-        elif bid == "apply-prompt":
-            self._do_apply_prompt()
-        elif bid == "play-note":
-            self._do_play_note()
+        elif bid == "research-preset":
+            self._do_research_preset()
+        elif bid == "apply-overrides":
+            self._do_apply_overrides()
+        elif bid == "daw-note":
+            self._do_daw_note()
 
     def _do_set_param(self) -> None:
         pid = self.query_one("#set-id", Input).value.strip()
@@ -288,28 +388,96 @@ class VstParamTui(App[None]):
         if proc.returncode == 0:
             self.refresh_params()
 
-    def _do_apply_prompt(self) -> None:
+    def _do_research_preset(self) -> None:
         prompt = self.query_one("#prompt-input", Input).value.strip()
-        result = self.query_one("#prompt-result", Static)
+        result = self.query_one("#research-result", Static)
         if not prompt:
             result.update("Enter a prompt first.")
             return
-        result.update(
-            f"Research prompt:\n{prompt}\n\n"
-            "(Wire web_search/web_fetch from vstpreset-mcp here to turn this "
-            "into parameter values.)"
-        )
-        self.notify("Prompt captured — research integration pending", timeout=4)
 
-    def _do_play_note(self) -> None:
+        result.update("Searching…")
+        try:
+            results = self._ddg_search(prompt, max_results=6)
+        except RuntimeError as e:
+            result.update(
+                f"Search blocked: {e}\n\n"
+                "Workaround: research in a browser, then paste findings into\n"
+                "'Apply research overrides' as id=value,id=value and click Apply."
+            )
+            return
+        except Exception as e:
+            result.update(f"Search error: {e}")
+            return
+
+        if not results:
+            result.update("No results found.")
+            return
+
+        lines = [f"Research: {prompt}\n"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"{i}. {r['title']}")
+            lines.append(f"   {r['url']}")
+            if r.get("snippet"):
+                lines.append(f"   {r['snippet'][:200]}")
+            lines.append("")
+        result.update("\n".join(lines))
+        self.notify(f"Found {len(results)} results", timeout=4)
+
+    def _do_apply_overrides(self) -> None:
+        text = self.query_one("#override-input", Input).value.strip()
+        result = self.query_one("#override-result", Static)
+        if not text:
+            result.update("Enter overrides like 1336600346=0.75,0x1b09d=0.4")
+            return
+
+        pairs = []
+        for pair in text.split(","):
+            pair = pair.strip()
+            if not pair or "=" not in pair:
+                continue
+            pid, val = pair.split("=", 1)
+            pairs.append((pid.strip(), val.strip()))
+
+        if not pairs:
+            result.update("No valid overrides found.")
+            return
+
+        # Apply all overrides in a single host invocation so they accumulate
+        # in one process (each fresh --set call would reload defaults).
+        cmd = [VSTPARAM_HOST, self.plugin_path]
+        for pid, val in pairs:
+            cmd += ["--set", pid, val]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        out_lines = proc.stdout.strip().splitlines() if proc.stdout else []
+        applied = sum(1 for ln in out_lines if "set ->" in ln and "ret=0" in ln)
+        failed = len(pairs) - applied
+        if proc.returncode != 0:
+            failed = len(pairs)
+
+        result.update(
+            proc.stdout.strip()
+            or proc.stderr.strip()
+            or f"Applied {applied} of {len(pairs)} override(s)"
+        )
+        self.notify(
+            f"Applied {applied} of {len(pairs)} override(s)"
+            + (f", {failed} failed" if failed else ""),
+            timeout=4,
+        )
+        if applied:
+            self.refresh_params()
+
+    def _do_daw_note(self) -> None:
         preview = self.query_one("#preview-content", Static)
         preview.update(
-            "MIDI replay is a placeholder.\n"
-            "Needs a synth backend (FluidSynth / Timidity / software synth)\n"
-            "plus a MIDI output port wired to this plugin.\n\n"
-            "Not implemented yet — preview area ready for wiring."
+            "To hear audio:\n"
+            "1. Load this plugin in a DAW/audio host (Carla, Bitwig, Ardour…)\n"
+            "2. Keep this TUI open and adjust parameters with --set\n"
+            "3. Parameter changes apply live to the loaded plugin instance\n\n"
+            "vstparam_host itself has no audio rendering engine.\n"
         )
-        self.notify("MIDI replay needs a synth backend", timeout=4)
+        self.notify("Preview is parameter-only; use a DAW for audio", timeout=4)
 
 
 def main() -> None:

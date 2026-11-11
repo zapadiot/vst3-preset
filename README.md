@@ -84,6 +84,12 @@ vstparam_host /path/to/Plugin.vst3
 # Set a parameter (ID accepts decimal or 0x hex), normalized value [0..1]
 vstparam_host /path/to/Plugin.vst3 --set 0x4faae71a 0.25
 
+# Set several parameters in one invocation (they accumulate in one process)
+vstparam_host /path/to/Plugin.vst3 --set 0x4faae71a 0.75 --set 0x1b09d 0.4
+
+# Set then save a preset snapshot in the same call
+vstparam_host /path/to/Plugin.vst3 --set 0x4faae71a 0.75 --set 0x1b09d 0.4 --save /tmp/preset.txt
+
 # Save a preset snapshot
 vstparam_host /path/to/Plugin.vst3 --save /tmp/preset.txt
 
