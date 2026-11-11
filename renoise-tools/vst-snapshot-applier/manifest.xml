@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <RenoiseScriptingTool>
-  <Id>zapadiot.vst_snapshot_applier</Id>
+  <Id>com.zapadiot.vst_snapshot_applier</Id>
   <Name>VST Snapshot Applier</Name>
   <Version>1.0</Version>
   <Description>Reads a vstparam_host snapshot file (# format: &lt;paramID decimal&gt; &lt;normalizedValue 0..1&gt;) and transfers values to a VST plugin loaded in Renoise.</Description>
   <MainScript>main.lua</MainScript>
-  <RenoiseVersion>3.5</RenoiseVersion>
+  <RenoiseVersion>3.5.4</RenoiseVersion>
   <ApiLevel>6</ApiLevel>
 </RenoiseScriptingTool>
