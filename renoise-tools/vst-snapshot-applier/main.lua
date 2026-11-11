@@ -117,12 +117,46 @@ local function apply_snapshot()
   local song = renoise.song()
 
   -- 1. Prompt user to select a snapshot file
-  local chosen = renoise.app():prompt_for_filename({
-    title = "Select VST snapshot file",
-    path = SNAPSHOT_PATH,
-    extensions = { "txt", "preset", "snapshot" },
-  })
-  if not chosen or chosen == "" then
+  local snapshot_path = nil
+
+  -- Try zenity first (Linux native file dialog)
+  local zenity_handle = io.popen(
+    "zenity --file-selection --title='Select VST snapshot file' " ..
+    "--file-filter='Snapshot files (*.txt *.preset *.snapshot)' " ..
+    "--filename=" .. shellescape(SNAPSHOT_PATH) .. " 2>/dev/null",
+    "r"
+  )
+  if zenity_handle then
+    local result = trim(zenity_handle:read("*a"))
+    zenity_handle:close()
+    if result and result ~= "" then
+      snapshot_path = result
+    end
+  end
+
+  -- Fallback: text input dialog (cross-platform)
+  if not snapshot_path then
+    local vb = renoise.ViewBuilder()
+    local button = renoise.app():show_custom_prompt(
+      "VST Snapshot Applier",
+      {
+        vb:text { text = "Enter snapshot file path:" },
+        vb:textfield {
+          id = "snapshot_path",
+          text = SNAPSHOT_PATH,
+        },
+      },
+      {"OK", "Cancel"}
+    )
+    if button == "OK" then
+      local entered = trim(vb.views.snapshot_path.text)
+      if entered and entered ~= "" then
+        snapshot_path = entered
+      end
+    end
+  end
+
+  if not snapshot_path then
     renoise.app():show_prompt(
       "VST Snapshot Applier",
       "No snapshot file selected.",
@@ -130,7 +164,6 @@ local function apply_snapshot()
     )
     return
   end
-  local snapshot_path = chosen
 
   -- 2. Find the first VST instrument in the song
   local target_instr = nil
