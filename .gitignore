@@ -1,0 +1,22 @@
+# Build artifacts
+vstparam-host/vstparam_host
+*.o
+*.a
+*.so
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Editor/OS
+.DS_Store
+*.swp
+
+# Generated presets/snapshots (examples keep if desired)
+*.preset.txt
+snap_*.txt
