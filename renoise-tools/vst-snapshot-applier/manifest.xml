@@ -5,6 +5,6 @@
   <Version>1.0</Version>
   <MainScript>main.lua</MainScript>
   <Description>Reads a vstparam_host snapshot file (# format: &lt;paramID decimal&gt; &lt;normalizedValue 0..1&gt;) and transfers values to a VST plugin loaded in Renoise. Matches parameters by title using vstparam_host's parameter listing.</Description>
-  <RenoiseVersion>3.1</RenoiseVersion>
-  <RenoiseApiLevel>5</RenoiseApiLevel>
+  <RenoiseVersion>3.5</RenoiseVersion>
+  <RenoiseApiLevel>6</RenoiseApiLevel>
 </PluginPackage>
