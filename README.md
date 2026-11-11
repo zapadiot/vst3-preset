@@ -206,6 +206,23 @@ Bridged Windows VST3s exposed via vstbridge work through the same host path: the
 - `web_search`/`web_fetch` are best-effort (DuckDuckGo HTML/network variability); combine with other research sources if needed.
 - `vstparam_host` is Linux-oriented in this build script (`module_linux.cpp`, `linuxmain.cpp`); adapting to other platforms requires the corresponding SDK platform sources.
 
+## Terminal UI (TUI)
+
+See `tui/README.md`. It's a Textual app wrapping `vstparam_host`:
+
+- parameter list/table view
+- set parameter by ID + normalized value
+- save/load snapshot
+- prompt / preset-research area
+- preview placeholder for MIDI replay
+
+```bash
+cd tui
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python vst_tui.py /home/baboon/.vst3/TAL-EQ.vst3
+```
+
 ## License
 
 `vstparam_host` is built against the Steinberg VST3 SDK — ensure your use/build complies with the [VST3 SDK licensing terms](https://www.steinberg.net/developers/). This repository does not include the VST3 SDK. Add a project license file as appropriate for your distribution.
