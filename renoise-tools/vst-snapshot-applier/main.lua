@@ -120,18 +120,22 @@ local function apply_snapshot()
   local snapshot_path = nil
 
   -- Try zenity first (Linux native file dialog)
-  local zenity_handle = io.popen(
-    "zenity --file-selection --title='Select VST snapshot file' " ..
-    "--file-filter='Snapshot files (*.txt *.preset *.snapshot)' " ..
-    "--filename=" .. shellescape(SNAPSHOT_PATH) .. " 2>/dev/null",
-    "r"
-  )
-  if zenity_handle then
-    local result = trim(zenity_handle:read("*a"))
-    zenity_handle:close()
-    if result and result ~= "" then
-      snapshot_path = result
+  local ok, result = pcall(function()
+    local h = io.popen(
+      "zenity --file-selection --title='Select VST snapshot file' " ..
+      "--file-filter='Snapshot files (*.txt *.preset *.snapshot)' " ..
+      "--filename=" .. shellescape(SNAPSHOT_PATH) .. " 2>/dev/null",
+      "r"
+    )
+    if h then
+      local r = trim(h:read("*a"))
+      h:close()
+      return r
     end
+    return nil
+  end)
+  if ok and result and result ~= "" then
+    snapshot_path = result
   end
 
   -- Fallback: text input dialog (cross-platform)
@@ -168,7 +172,7 @@ local function apply_snapshot()
   -- 2. Find the first VST instrument in the song
   local target_instr = nil
   for _, instr in ipairs(song.instruments) do
-    if instr.type == renoise.Instrument.TYPE_PLUGIN then
+    if instr.plugin_properties then
       target_instr = instr
       break
     end
