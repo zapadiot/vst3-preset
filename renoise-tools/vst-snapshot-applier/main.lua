@@ -1,8 +1,8 @@
 --[[
-  VST Snapshot Applier — Renoise Lua Tool
-  =======================================
+  VST Snapshot Applier — Renoise Lua Tool (Automatic)
+  ====================================================
   Reads a vstparam_host snapshot file and transfers parameter values to a VST
-  plugin loaded in Renoise.
+  plugin loaded in Renoise — fully automatic, no dialogs.
 
   Snapshot format (produced by `vstparam_host --save`):
     # VST3 parameter preset snapshot
@@ -10,25 +10,28 @@
     1336600346 0.5
     110749 0.5
 
+  Configuration (edit at top of file):
+    SNAPSHOT_PATH   — snapshot file to read (default: /tmp/tal-bassline-goa-classic.txt)
+    VSTPARAM_HOST   — path to vstparam_host binary
+    VST3_DIR        — directory to scan for .vst3 bundles (default: ~/.vst3)
+
   How it works:
     1. Finds the first VST instrument in the Renoise song
-    2. Reads its .vst3 file path from Renoise
-    3. Parses the snapshot file (param ID + normalized value)
-    4. Runs `vstparam_host <path>` to get param ID -&gt; parameter title mapping
+    2. Scans VST3_DIR for a bundle matching the plugin name
+    3. Parses the snapshot file
+    4. Runs vstparam_host to get param ID -> title mapping
     5. Matches titles to Renoise plugin_parameters by name
     6. Applies each normalized value (0..1)
 
   Usage:
-    - Load a VST3 plugin (e.g. TAL-Pha.vst3) as a Renoise instrument
-    - Open Options -&gt; Scripting Editor &amp; Monitor, paste this script, click Run
-    - Or install as a .xrnx tool (see manifest.xml)
-
-  Configure the two paths at the top of this file.
+    - Load a VST3 plugin (e.g. TAL-BassLine-101.vst3) as a Renoise instrument
+    - Tools -> VST Snapshot Applier (runs automatically, no prompts)
 --]]
 
 -- ================= CONFIGURE THESE =================
-local SNAPSHOT_PATH  = "/tmp/tal-pha-lush-pad.txt"   -- snapshot file to read
-local VSTPARAM_HOST  = "/home/baboon/bin/vstparam_host"  -- path to vstparam_host binary
+local SNAPSHOT_PATH  = "/tmp/tal-bassline-goa-classic.txt"   -- snapshot file to read
+local VSTPARAM_HOST  = "/home/baboon/bin/vstparam_host"      -- path to vstparam_host binary
+local VST3_DIR       = os.getenv("HOME") .. "/.vst3"         -- directory to scan for .vst3 bundles
 -- ===================================================
 
 --------------------------------------------------------------------------------
@@ -111,65 +114,55 @@ local function get_vst_param_map(plugin_path)
 end
 
 --------------------------------------------------------------------------------
+-- Auto-scan VST3_DIR for a bundle matching the plugin name
+--------------------------------------------------------------------------------
+local function find_vst3_bundle(plugin_name)
+  local handle = io.popen("ls -1d " .. shellescape(VST3_DIR) .. "/*.vst3 2>/dev/null", "r")
+  if not handle then
+    return nil
+  end
+  local bundles = {}
+  for line in handle:lines() do
+    table.insert(bundles, trim(line))
+  end
+  handle:close()
+
+  if #bundles == 0 then
+    return nil
+  end
+
+  local name_lower = tostring(plugin_name):lower()
+
+  -- Try exact match first (folder name == plugin name)
+  for _, bundle in ipairs(bundles) do
+    local folder = bundle:match("([^/]+)%.vst3$")
+    if folder and folder:lower() == name_lower then
+      return bundle
+    end
+  end
+
+  -- Try: plugin name contains folder name or vice versa
+  for _, bundle in ipairs(bundles) do
+    local folder = bundle:match("([^/]+)%.vst3$")
+    if folder then
+      local folder_lower = folder:lower()
+      if name_lower:find(folder_lower, 1, true) or folder_lower:find(name_lower, 1, true) then
+        return bundle
+      end
+    end
+  end
+
+  -- Fallback: return first bundle
+  return bundles[1]
+end
+
+--------------------------------------------------------------------------------
 -- Main
 --------------------------------------------------------------------------------
 local function apply_snapshot()
   local song = renoise.song()
 
-  -- 1. Prompt user to select a snapshot file
-  local snapshot_path = nil
-
-  -- Try zenity first (Linux native file dialog)
-  local ok, result = pcall(function()
-    local h = io.popen(
-      "zenity --file-selection --title='Select VST snapshot file' " ..
-      "--file-filter='Snapshot files (*.txt *.preset *.snapshot)' " ..
-      "--filename=" .. shellescape(SNAPSHOT_PATH) .. " 2>/dev/null",
-      "r"
-    )
-    if h then
-      local r = trim(h:read("*a"))
-      h:close()
-      return r
-    end
-    return nil
-  end)
-  if ok and result and result ~= "" then
-    snapshot_path = result
-  end
-
-  -- Fallback: text input dialog (cross-platform)
-  if not snapshot_path then
-    local vb = renoise.ViewBuilder()
-    local button = renoise.app():show_custom_prompt(
-      "VST Snapshot Applier",
-      vb:column {
-        vb:text { text = "Enter snapshot file path:" },
-        vb:textfield {
-          id = "snapshot_path",
-          text = SNAPSHOT_PATH,
-        },
-      },
-      {"OK", "Cancel"}
-    )
-    if button == "OK" then
-      local entered = trim(vb.views.snapshot_path.text)
-      if entered and entered ~= "" then
-        snapshot_path = entered
-      end
-    end
-  end
-
-  if not snapshot_path then
-    renoise.app():show_prompt(
-      "VST Snapshot Applier",
-      "No snapshot file selected.",
-      {"OK"}
-    )
-    return
-  end
-
-  -- 2. Find the first VST instrument in the song (just for its name)
+  -- 1. Find the first VST instrument in the song
   local target_instr = nil
   for _, instr in ipairs(song.instruments) do
     if instr.plugin_properties then
@@ -187,54 +180,34 @@ local function apply_snapshot()
     return
   end
 
-  -- 2. Get plugin path from user (Renoise does not expose plugin file path)
-  local plugin_path = nil
-
-  local vb = renoise.ViewBuilder()
-  local button = renoise.app():show_custom_prompt(
-    "VST Snapshot Applier — VST Path",
-    vb:column {
-      vb:text {
-        text = "Enter the .vst3 bundle path for '" .. tostring(target_instr.name) .. "':",
-      },
-      vb:textfield {
-        id = "plugin_path",
-        text = "/home/baboon/.vst3/" .. tostring(target_instr.name) .. ".vst3",
-      },
-    },
-    {"OK", "Cancel"}
-  )
-  if button == "OK" then
-    local entered = trim(vb.views.plugin_path.text)
-    if entered and entered ~= "" then
-      plugin_path = entered
-    end
-  end
-
+  -- 2. Auto-detect plugin path by scanning ~/.vst3/
+  local plugin_path = find_vst3_bundle(target_instr.name)
   if not plugin_path then
     renoise.app():show_prompt(
       "VST Snapshot Applier",
-      "No VST path entered.",
+      "Could not auto-find .vst3 bundle for '" .. tostring(target_instr.name) .. "'.\n\n"
+        .. "Searched: " .. VST3_DIR .. "\n\n"
+        .. "Ensure the plugin is installed there.",
       {"OK"}
     )
     return
   end
 
   -- 3. Parse snapshot
-  local entries, err = parse_snapshot(snapshot_path)
+  local entries, err = parse_snapshot(SNAPSHOT_PATH)
   if not entries then
     renoise.app():show_prompt("VST Snapshot Applier", err, {"OK"})
     return
   end
 
-  -- 4. Get param ID -&gt; title mapping from vstparam_host
+  -- 4. Get param ID -> title mapping from vstparam_host
   local param_map, err2 = get_vst_param_map(plugin_path)
   if not param_map then
     renoise.app():show_prompt("VST Snapshot Applier", err2, {"OK"})
     return
   end
 
-  -- 5. Build Renoise name -&gt; 1-based index map
+  -- 5. Build Renoise name -> 1-based index map
   local params = target_instr.plugin_parameters
   if not params or #params == 0 then
     renoise.app():show_prompt(
@@ -289,10 +262,11 @@ local function apply_snapshot()
   end
 
   local msg = string.format(
-    "Applied %d / %d parameters to instrument '%s'\nSkipped: %d\n\n%s",
+    "Applied %d / %d parameters to '%s'\nPlugin: %s\nSkipped: %d\n\n%s",
     applied,
     #entries,
     tostring(target_instr.name),
+    plugin_path,
     skipped,
     table.concat(results, "\n"):sub(1, 3000)
   )
