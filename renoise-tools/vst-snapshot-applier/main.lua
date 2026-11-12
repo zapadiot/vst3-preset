@@ -78,17 +78,30 @@ end
 -- Run vstparam_host, parse table output into id -> {index, title}
 --------------------------------------------------------------------------------
 local function get_vst_param_map(plugin_path)
+  -- Check binary exists first
+  local f = io.open(VSTPARAM_HOST, "r")
+  if not f then
+    return nil, "vstparam_host binary not found at: " .. VSTPARAM_HOST
+  end
+  f:close()
+
   local cmd = VSTPARAM_HOST .. " " .. shellescape(plugin_path)
   local handle = io.popen(cmd)
   if not handle then
-    return nil, "Cannot run vstparam_host (" .. cmd .. ")"
+    return nil, "Cannot run vstparam_host: " .. cmd
   end
   local output = handle:read("*a")
   handle:close()
 
+  if not output or output == "" then
+    return nil, "vstparam_host produced no output for: " .. plugin_path
+  end
+
   local map = {}
+  local count = 0
   for line in output:gmatch("[^\r\n]+") do
-    -- matches:  [  0] id=0x2e186ce8 On / Off def=0 value=0 units= flags=1
+    -- Match: [  0] id=0x2e186ce8 On / Off def=0 value=0 units= flags=1
+    -- Also match: [  0] id=1336600346 On / Off def=0 value=0 units= flags=1
     local idx, id_hex, title = line:match(
       "%[%s*(%d+)%]%s+id=(0[xX][0-9a-fA-F]+|%d+)%s+(.-)%s+def="
     )
@@ -104,12 +117,17 @@ local function get_vst_param_map(plugin_path)
           index = tonumber(idx),
           title = trim(title),
         }
+        count = count + 1
       end
     end
   end
 
-  if next(map) == nil then
-    return nil, "vstparam_host returned no parseable parameters."
+  if count == 0 then
+    -- Show raw output for debugging
+    local preview = output:sub(1, 800)
+    return nil, "vstparam_host returned no parseable parameters.\n\n"
+      .. "Command: " .. cmd .. "\n"
+      .. "Output preview:\n" .. preview
   end
   return map
 end
