@@ -143,7 +143,7 @@ local function apply_snapshot()
     local vb = renoise.ViewBuilder()
     local button = renoise.app():show_custom_prompt(
       "VST Snapshot Applier",
-      {
+      vb:column {
         vb:text { text = "Enter snapshot file path:" },
         vb:textfield {
           id = "snapshot_path",
@@ -193,7 +193,7 @@ local function apply_snapshot()
   local vb = renoise.ViewBuilder()
   local button = renoise.app():show_custom_prompt(
     "VST Snapshot Applier — VST Path",
-    {
+    vb:column {
       vb:text {
         text = "Enter the .vst3 bundle path for '" .. tostring(target_instr.name) .. "':",
       },
