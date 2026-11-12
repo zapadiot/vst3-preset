@@ -136,10 +136,17 @@ end
 --------------------------------------------------------------------------------
 -- Auto-scan VST3_DIR for a bundle matching the plugin name
 --------------------------------------------------------------------------------
+-- Normalize a name for comparison: strip non-alphanumeric, lowercase
+-- e.g. "TAL BassLine 101" -> "talbassline101"
+--      "TAL-BassLine-101" -> "talbassline101"
+local function normalize_name(s)
+  return tostring(s):lower():gsub("[^a-z0-9]", "")
+end
+
 local function find_vst3_bundle(plugin_name)
   local handle = io.popen("ls -1d " .. shellescape(VST3_DIR) .. "/*.vst3 2>/dev/null", "r")
   if not handle then
-    return nil
+    return nil, "Cannot list VST3 directory: " .. VST3_DIR
   end
   local bundles = {}
   for line in handle:lines() do
@@ -148,43 +155,38 @@ local function find_vst3_bundle(plugin_name)
   handle:close()
 
   if #bundles == 0 then
-    return nil
+    return nil, "No .vst3 bundles found in: " .. VST3_DIR
   end
 
-  local name_lower = tostring(plugin_name):lower()
+  local name_norm = normalize_name(plugin_name)
 
-  -- Try exact match first (folder name == plugin name)
+  -- Try exact match first (normalized folder name == normalized plugin name)
   for _, bundle in ipairs(bundles) do
     local folder = bundle:match("([^/]+)%.vst3$")
-    if folder and folder:lower() == name_lower then
-      return bundle
+    if folder and normalize_name(folder) == name_norm then
+      return bundle, nil
     end
   end
 
-  -- Try: plugin name contains folder name or vice versa
+  -- Try normalized contains match
   for _, bundle in ipairs(bundles) do
     local folder = bundle:match("([^/]+)%.vst3$")
     if folder then
-      local folder_lower = folder:lower()
-      if name_lower:find(folder_lower, 1, true) or folder_lower:find(name_lower, 1, true) then
-        return bundle
+      local folder_norm = normalize_name(folder)
+      if name_norm:find(folder_norm, 1, true) or folder_norm:find(name_norm, 1, true) then
+        return bundle, nil
       end
     end
   end
 
   -- No match found: list all available bundles
-  local msg = "No .vst3 bundle matches '" .. tostring(plugin_name) .. "'.
-
-"
-    .. "Available bundles in " .. VST3_DIR .. ":
-"
+  local msg = "No .vst3 bundle matches '" .. tostring(plugin_name) .. "'.\n\n"
+    .. "Available bundles in " .. VST3_DIR .. ":\n"
   for _, bundle in ipairs(bundles) do
     local folder = bundle:match("([^/]+)%.vst3$")
-    msg = msg .. "  - " .. tostring(folder) .. "
-"
+    msg = msg .. "  - " .. tostring(folder) .. "\n"
   end
-  msg = msg .. "
-Edit VST3_DIR in main.lua, or ensure the plugin is installed there."
+  msg = msg .. "\nEdit VST3_DIR in main.lua, or ensure the plugin is installed there."
   return nil, msg
 end
 
