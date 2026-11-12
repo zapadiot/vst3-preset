@@ -169,7 +169,7 @@ local function apply_snapshot()
     return
   end
 
-  -- 2. Find the first VST instrument in the song
+  -- 2. Find the first VST instrument in the song (just for its name)
   local target_instr = nil
   for _, instr in ipairs(song.instruments) do
     if instr.plugin_properties then
@@ -187,14 +187,34 @@ local function apply_snapshot()
     return
   end
 
-  -- 2. Get plugin file path
-  local props = target_instr.plugin_properties
-  local plugin_path = props and props.file_name or ""
-  if plugin_path == "" then
+  -- 2. Get plugin path from user (Renoise does not expose plugin file path)
+  local plugin_path = nil
+
+  local vb = renoise.ViewBuilder()
+  local button = renoise.app():show_custom_prompt(
+    "VST Snapshot Applier — VST Path",
+    {
+      vb:text {
+        text = "Enter the .vst3 bundle path for '" .. tostring(target_instr.name) .. "':",
+      },
+      vb:textfield {
+        id = "plugin_path",
+        text = "/home/baboon/.vst3/" .. tostring(target_instr.name) .. ".vst3",
+      },
+    },
+    {"OK", "Cancel"}
+  )
+  if button == "OK" then
+    local entered = trim(vb.views.plugin_path.text)
+    if entered and entered ~= "" then
+      plugin_path = entered
+    end
+  end
+
+  if not plugin_path then
     renoise.app():show_prompt(
       "VST Snapshot Applier",
-      "Cannot determine VST file path for instrument '"
-        .. tostring(target_instr.name) .. "'.",
+      "No VST path entered.",
       {"OK"}
     )
     return
