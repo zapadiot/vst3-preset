@@ -268,7 +268,8 @@ local function apply_snapshot()
   end
 
   -- 6. Build Renoise name -> 1-based index map
-  local params = target_instr.plugin_parameters
+  local plugin = target_instr.plugin
+  local params = plugin and plugin.parameters
   if not params or #params == 0 then
     renoise.app():show_prompt(
       "VST Snapshot Applier",
