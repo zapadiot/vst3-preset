@@ -172,8 +172,20 @@ local function find_vst3_bundle(plugin_name)
     end
   end
 
-  -- Fallback: return first bundle
-  return bundles[1]
+  -- No match found: list all available bundles
+  local msg = "No .vst3 bundle matches '" .. tostring(plugin_name) .. "'.
+
+"
+    .. "Available bundles in " .. VST3_DIR .. ":
+"
+  for _, bundle in ipairs(bundles) do
+    local folder = bundle:match("([^/]+)%.vst3$")
+    msg = msg .. "  - " .. tostring(folder) .. "
+"
+  end
+  msg = msg .. "
+Edit VST3_DIR in main.lua, or ensure the plugin is installed there."
+  return nil, msg
 end
 
 --------------------------------------------------------------------------------
@@ -232,13 +244,11 @@ local function apply_snapshot()
   end
 
   -- 3. Auto-detect plugin path by scanning ~/.vst3/
-  local plugin_path = find_vst3_bundle(target_instr.name)
+  local plugin_path, bundle_err = find_vst3_bundle(target_instr.name)
   if not plugin_path then
     renoise.app():show_prompt(
       "VST Snapshot Applier",
-      "Could not auto-find .vst3 bundle for '" .. tostring(target_instr.name) .. "'.\n\n"
-        .. "Searched: " .. VST3_DIR .. "\n\n"
-        .. "Ensure the plugin is installed there.",
+      bundle_err,
       {"OK"}
     )
     return
