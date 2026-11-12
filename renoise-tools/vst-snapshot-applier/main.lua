@@ -46,6 +46,13 @@ local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Normalize a name for comparison: strip non-alphanumeric, lowercase
+-- e.g. "TAL BassLine 101" -> "talbassline101"
+--      "TAL-BassLine-101" -> "talbassline101"
+local function normalize_name(s)
+  return tostring(s):lower():gsub("[^a-z0-9]", "")
+end
+
 --------------------------------------------------------------------------------
 -- Parse snapshot file: returns { {id=NNN, value=0.5}, ... }
 --------------------------------------------------------------------------------
@@ -101,8 +108,6 @@ local function get_vst_param_map(plugin_path)
   local count = 0
   for line in output:gmatch("[^\r\n]+") do
     -- Match: [  0] id=0x30 A:Lfo1_Rate def=0 value=0 units= flags=1
-    -- Also match: [  0] id=1336600346 On / Off def=0 value=0 units= flags=1
-    -- Simpler pattern: %S+ for ID (any non-whitespace), lazy title before " def="
     local idx, id_val, title = line:match(
       "%[%s*(%d+)%]%s+id=(%S+)%s+(.-)%s+def="
     )
@@ -124,7 +129,6 @@ local function get_vst_param_map(plugin_path)
   end
 
   if count == 0 then
-    -- Show raw output for debugging
     local preview = output:sub(1, 800)
     return nil, "vstparam_host returned no parseable parameters.\n\n"
       .. "Command: " .. cmd .. "\n"
@@ -136,13 +140,6 @@ end
 --------------------------------------------------------------------------------
 -- Auto-scan VST3_DIR for a bundle matching the plugin name
 --------------------------------------------------------------------------------
--- Normalize a name for comparison: strip non-alphanumeric, lowercase
--- e.g. "TAL BassLine 101" -> "talbassline101"
---      "TAL-BassLine-101" -> "talbassline101"
-local function normalize_name(s)
-  return tostring(s):lower():gsub("[^a-z0-9]", "")
-end
-
 local function find_vst3_bundle(plugin_name)
   local handle = io.popen("ls -1d " .. shellescape(VST3_DIR) .. "/*.vst3 2>/dev/null", "r")
   if not handle then
