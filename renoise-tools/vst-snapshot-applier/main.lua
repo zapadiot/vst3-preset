@@ -280,4 +280,7 @@ local function apply_snapshot()
   renoise.app():show_prompt("VST Snapshot Applier — Done", msg, {"OK"})
 end
 
-apply_snapshot()
+renoise.tool():add_menu_entry {
+  name = "Main Menu:Tools:VST Snapshot Applier",
+  invoke = apply_snapshot
+}
