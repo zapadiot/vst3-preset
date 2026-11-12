@@ -100,17 +100,18 @@ local function get_vst_param_map(plugin_path)
   local map = {}
   local count = 0
   for line in output:gmatch("[^\r\n]+") do
-    -- Match: [  0] id=0x2e186ce8 On / Off def=0 value=0 units= flags=1
+    -- Match: [  0] id=0x30 A:Lfo1_Rate def=0 value=0 units= flags=1
     -- Also match: [  0] id=1336600346 On / Off def=0 value=0 units= flags=1
-    local idx, id_hex, title = line:match(
-      "%[%s*(%d+)%]%s+id=(0[xX][0-9a-fA-F]+|%d+)%s+(.-)%s+def="
+    -- Simpler pattern: %S+ for ID (any non-whitespace), lazy title before " def="
+    local idx, id_val, title = line:match(
+      "%[%s*(%d+)%]%s+id=(%S+)%s+(.-)%s+def="
     )
-    if idx and id_hex and title then
+    if idx and id_val and title then
       local id_dec
-      if id_hex:sub(1, 2):lower() == "0x" then
-        id_dec = tonumber(id_hex, 16)
+      if id_val:sub(1, 2):lower() == "0x" then
+        id_dec = tonumber(id_val, 16)
       else
-        id_dec = tonumber(id_hex)
+        id_dec = tonumber(id_val)
       end
       if id_dec then
         map[id_dec] = {
