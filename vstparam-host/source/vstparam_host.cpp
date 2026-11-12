@@ -45,6 +45,15 @@ static std::string toUtf8 (const String128& str)
     return StringConvert::convert (str);
 }
 
+static std::string trim (const std::string& s)
+{
+    size_t start = s.find_first_not_of (" \t\r\n");
+    if (start == std::string::npos)
+        return "";
+    size_t end = s.find_last_not_of (" \t\r\n");
+    return s.substr (start, end - start + 1);
+}
+
 int main (int argc, char* argv[])
 {
     if (argc < 2)
@@ -175,6 +184,9 @@ int main (int argc, char* argv[])
                 return 1;
             }
             out << "# VST3 parameter preset snapshot" << std::endl;
+            out << "# plugin: " << classInfo.name () << std::endl;
+            out << "# vendor: " << classInfo.vendor () << std::endl;
+            out << "# version: " << classInfo.version () << std::endl;
             out << "# format: <paramID decimal> <normalizedValue 0..1>" << std::endl;
             int savedCount = 0;
             for (int32 i = 0; i < parameterCount; ++i)
@@ -204,6 +216,26 @@ int main (int argc, char* argv[])
                 return 1;
             }
             std::string line;
+            std::string snap_plugin, snap_vendor, snap_version;
+            // Read header info (plugin/vendor/version lines) first
+            while (std::getline (in, line))
+            {
+                if (line.empty () || line[0] != '#')
+                    break;
+                if (line.find ("# plugin:") == 0)
+                    snap_plugin = trim (line.substr (9));
+                else if (line.find ("# vendor:") == 0)
+                    snap_vendor = trim (line.substr (9));
+                else if (line.find ("# version:") == 0)
+                    snap_version = trim (line.substr (10));
+            }
+            if (!snap_plugin.empty ())
+            {
+                std::cout << "Snapshot: " << snap_plugin
+                          << " | " << snap_vendor
+                          << " | " << snap_version << std::endl;
+            }
+            // Re-process data lines from current stream position
             int loadedCount = 0;
             while (std::getline (in, line))
             {
