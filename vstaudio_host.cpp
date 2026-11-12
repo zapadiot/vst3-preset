@@ -34,6 +34,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <vector>
 #include <map>
 #include <cmath>
@@ -47,6 +48,26 @@
 
 using namespace Steinberg;
 using namespace Vst;
+
+//==============================================================================
+// Signal handler for debugging crashes
+//==============================================================================
+static void segv_handler (int sig)
+{
+    std::cerr << "\n*** SEGMENTATION FAULT (signal " << sig << ") ***" << std::endl;
+    std::cerr << "Please report this with the steps to reproduce." << std::endl;
+    _exit (1);
+}
+
+static void install_signal_handlers ()
+{
+    struct sigaction sa;
+    memset (&sa, 0, sizeof (sa));
+    sa.sa_handler = segv_handler;
+    sigaction (SIGSEGV, &sa, nullptr);
+    sigaction (SIGABRT, &sa, nullptr);
+    sigaction (SIGBUS, &sa, nullptr);
+}
 
 //==============================================================================
 // Minimal IComponentHandler
@@ -268,13 +289,13 @@ struct ActiveNote
 };
 
 //==============================================================================
-struct KeyMapEntry2
+struct KeyMapEntry
 {
     int key;
     uint16 note;
 };
 
-static const KeyMapEntry2 keyMap[] =
+static const KeyMapEntry keyMap[] =
 {
     {'z', 60}, {'x', 62}, {'c', 64}, {'v', 65}, {'b', 67}, {'n', 69}, {'m', 71},
     {',', 72}, {'.', 74}, {'/', 76},
@@ -357,6 +378,8 @@ int main (int argc, char* argv[])
     // Host context
     Vst::HostApplication hostApp;
     Vst::PluginContextFactory::instance ().setPluginContext (&hostApp);
+
+    install_signal_handlers ();
 
     // Load module
     std::string error;
@@ -544,6 +567,7 @@ int main (int argc, char* argv[])
 
     std::cerr << "component activated, sampleRate=" << setup.sampleRate
               << " maxSamplesPerBlock=" << setup.maxSamplesPerBlock << std::endl;
+    std::cerr.flush ();
 
     //--------------------------------------------------------------
     // Set up terminal + ALSA
@@ -567,8 +591,8 @@ int main (int argc, char* argv[])
     unsigned sampleRate = (unsigned) audio.sampleRate_;
     unsigned channels = audio.channels_;
 
-    // Audio buffers (float interleaved)
-    std::vector<float> audioBuf (periodSize * channels);
+    // Audio buffers (float interleaved) - ZERO INITIALIZED to avoid garbage
+    std::vector<float> audioBuf (periodSize * channels, 0.0f);
 
     // Event list for MIDI input
     auto eventList = owned (new HostEventList ());
@@ -591,14 +615,14 @@ int main (int argc, char* argv[])
     std::cerr << "  [ / ]: filter cutoff down/up" << std::endl;
     std::cerr << "  q: quit" << std::endl;
     std::cerr << "========================" << std::endl;
+    std::cerr.flush ();
 
     // Find volume and cutoff parameters for quick tweak
     int volIdx = findParamByName (controller, "volume");
     int cutoffIdx = findParamByName (controller, "cutoff");
 
-    // Demo mode: simple bassline pattern
+    // Demo mode state
     int demoStep = 0;
-    int demoNote = 60; // C4
     int demoGateCounter = 0;
     const int demoPattern[] = { 60, 60, 60, 67, 60, 65, 60, 67, 60, 62, 60, 65, 57, 60, 62, 64 };
     const int demoPatternLen = 16;
@@ -608,134 +632,135 @@ int main (int argc, char* argv[])
     while (running)
     {
         //--------------------------------------------------------------
-        // Handle keyboard input (non-blocking) or demo mode
+        // Handle keyboard input (non-blocking)
         //--------------------------------------------------------------
         if (termOk)
         {
             while (term.hasKey ())
             {
-            int key = term.getKey ();
-            if (key < 0)
-                break;
+                int key = term.getKey ();
+                if (key < 0)
+                    break;
 
-            switch (key)
-            {
-            case 'q':
-            case 'Q':
-                running = false;
-                break;
-
-            case ' ':
-                sustain = !sustain;
-                if (!sustain)
+                switch (key)
                 {
-                    for (auto& kv : activeNotes)
+                case 'q':
+                case 'Q':
+                    running = false;
+                    break;
+
+                case ' ':
+                    sustain = !sustain;
+                    if (!sustain)
+                    {
+                        for (auto& kv : activeNotes)
+                        {
+                            Event ev;
+                            memset (&ev, 0, sizeof (ev));
+                            ev.busIndex = 0;
+                            ev.sampleOffset = 0;
+                            ev.ppqPosition = 0;
+                            ev.type = Event::kNoteOffEvent;
+                            ev.flags = Event::kIsLive;
+                            ev.noteOff.pitch = kv.second.pitch;
+                            ev.noteOff.velocity = 0;
+                            ev.noteOff.noteId = kv.first;
+                            eventList->addEvent (ev);
+                        }
+                        activeNotes.clear ();
+                        nextNoteId = 1;
+                    }
+                    std::cerr << "sustain: " << (sustain ? "ON" : "OFF") << std::endl;
+                    break;
+
+                case '-':
+                case '_':
+                    if (volIdx >= 0)
+                    {
+                        ParameterInfo info;
+                        if (controller->getParameterInfo (volIdx, info) == kResultTrue)
+                        {
+                            double v = controller->getParamNormalized (info.id);
+                            v -= 0.05;
+                            if (v < 0.0) v = 0.0;
+                            controller->setParamNormalized (info.id, (Vst::ParamValue) v);
+                            std::cerr << "volume: " << v << std::endl;
+                        }
+                    }
+                    break;
+
+                case '=':
+                case '+':
+                    if (volIdx >= 0)
+                    {
+                        ParameterInfo info;
+                        if (controller->getParameterInfo (volIdx, info) == kResultTrue)
+                        {
+                            double v = controller->getParamNormalized (info.id);
+                            v += 0.05;
+                            if (v > 1.0) v = 1.0;
+                            controller->setParamNormalized (info.id, (Vst::ParamValue) v);
+                            std::cerr << "volume: " << v << std::endl;
+                        }
+                    }
+                    break;
+
+                case '[':
+                    if (cutoffIdx >= 0)
+                    {
+                        ParameterInfo info2;
+                        controller->getParameterInfo (cutoffIdx, info2);
+                        double v2 = controller->getParamNormalized (info2.id);
+                        v2 -= 0.05;
+                        if (v2 < 0.0) v2 = 0.0;
+                        controller->setParamNormalized (info2.id, (Vst::ParamValue) v2);
+                        std::cerr << "cutoff: " << v2 << std::endl;
+                    }
+                    break;
+
+                case ']':
+                    if (cutoffIdx >= 0)
+                    {
+                        ParameterInfo info2;
+                        controller->getParameterInfo (cutoffIdx, info2);
+                        double v2 = controller->getParamNormalized (info2.id);
+                        v2 += 0.05;
+                        if (v2 > 1.0) v2 = 1.0;
+                        controller->setParamNormalized (info2.id, (Vst::ParamValue) v2);
+                        std::cerr << "cutoff: " << v2 << std::endl;
+                    }
+                    break;
+
+                default:
+                {
+                    uint16 note = keyToNote (key);
+                    if (note != 255 && hasEventInput)
                     {
                         Event ev;
                         memset (&ev, 0, sizeof (ev));
                         ev.busIndex = 0;
                         ev.sampleOffset = 0;
                         ev.ppqPosition = 0;
-                        ev.type = Event::kNoteOffEvent;
+                        ev.type = Event::kNoteOnEvent;
                         ev.flags = Event::kIsLive;
-                        ev.noteOff.pitch = kv.second.pitch;
-                        ev.noteOff.velocity = 0;
-                        ev.noteOff.noteId = kv.first;
+                        ev.noteOn.pitch = note;
+                        ev.noteOn.velocity = 100;
+                        ev.noteOn.length = 0;
+                        ev.noteOn.noteId = nextNoteId;
+                        ev.noteOn.tuning = 0.0f;
                         eventList->addEvent (ev);
+
+                        ActiveNote an;
+                        an.noteId = nextNoteId;
+                        an.pitch = note;
+                        activeNotes[nextNoteId] = an;
+                        nextNoteId++;
+
+                        std::cerr << "note on: " << (int)note << " (id=" << (int)ev.noteOn.noteId << ")" << std::endl;
                     }
-                    activeNotes.clear ();
-                    nextNoteId = 1;
+                    break;
                 }
-                std::cerr << "sustain: " << (sustain ? "ON" : "OFF") << std::endl;
-                break;
-
-            case '-':
-            case '_':
-                if (volIdx >= 0)
-                {
-                    ParameterInfo info;
-                    if (controller->getParameterInfo (volIdx, info) == kResultTrue)
-                    {
-                        double v = controller->getParamNormalized (info.id);
-                        v -= 0.05;
-                        if (v < 0.0) v = 0.0;
-                        controller->setParamNormalized (info.id, (Vst::ParamValue) v);
-                        std::cerr << "volume: " << v << std::endl;
-                    }
                 }
-                break;
-
-            case '=':
-            case '+':
-                if (volIdx >= 0)
-                {
-                    ParameterInfo info;
-                    if (controller->getParameterInfo (volIdx, info) == kResultTrue)
-                    {
-                        double v = controller->getParamNormalized (info.id);
-                        v += 0.05;
-                        if (v > 1.0) v = 1.0;
-                        controller->setParamNormalized (info.id, (Vst::ParamValue) v);
-                        std::cerr << "volume: " << v << std::endl;
-                    }
-                }
-                break;
-
-            case '[':
-                if (cutoffIdx >= 0)
-                {
-                    ParameterInfo info2;
-                    controller->getParameterInfo (cutoffIdx, info2);
-                    double v2 = controller->getParamNormalized (info2.id);
-                    v2 -= 0.05;
-                    if (v2 < 0.0) v2 = 0.0;
-                    controller->setParamNormalized (info2.id, (Vst::ParamValue) v2);
-                    std::cerr << "cutoff: " << v2 << std::endl;
-                }
-                break;
-
-            case ']':
-                if (cutoffIdx >= 0)
-                {
-                    ParameterInfo info2;
-                    controller->getParameterInfo (cutoffIdx, info2);
-                    double v2 = controller->getParamNormalized (info2.id);
-                    v2 += 0.05;
-                    if (v2 > 1.0) v2 = 1.0;
-                    controller->setParamNormalized (info2.id, (Vst::ParamValue) v2);
-                    std::cerr << "cutoff: " << v2 << std::endl;
-                }
-                break;
-
-            default:
-            {
-                uint16 note = keyToNote (key);
-                if (note != 255 && hasEventInput)
-                {
-                    Event ev;
-                    memset (&ev, 0, sizeof (ev));
-                    ev.busIndex = 0;
-                    ev.sampleOffset = 0;
-                    ev.ppqPosition = 0;
-                    ev.type = Event::kNoteOnEvent;
-                    ev.flags = Event::kIsLive;
-                    ev.noteOn.pitch = note;
-                    ev.noteOn.velocity = 100;
-                    ev.noteOn.length = 0;
-                    ev.noteOn.noteId = nextNoteId;
-                    ev.noteOn.tuning = 0.0f;
-                    eventList->addEvent (ev);
-
-                    ActiveNote an;
-                    an.noteId = nextNoteId;
-                    an.pitch = note;
-                    activeNotes[nextNoteId] = an;
-                    nextNoteId++;
-
-                    std::cerr << "note on: " << (int)note << " (id=" << (int)ev.noteOn.noteId << ")" << std::endl;
-                }
-                break;
-            }
             }
         }
 
@@ -745,13 +770,12 @@ int main (int argc, char* argv[])
         if (demoMode && hasEventInput)
         {
             demoGateCounter++;
-            if (demoGateCounter >= 4) // note every 4 blocks (~50ms at 44.1k with 512 block)
+            if (demoGateCounter >= 4)
             {
                 demoGateCounter = 0;
                 int note = demoPattern[demoStep];
                 demoStep = (demoStep + 1) % demoPatternLen;
 
-                // Note on
                 Event evOn;
                 memset (&evOn, 0, sizeof (evOn));
                 evOn.busIndex = 0;
@@ -772,11 +796,10 @@ int main (int argc, char* argv[])
                 activeNotes[nextNoteId] = an;
                 nextNoteId++;
 
-                // Note off after short duration
                 Event evOff;
                 memset (&evOff, 0, sizeof (evOff));
                 evOff.busIndex = 0;
-                evOff.sampleOffset = (int32)(periodSize * 3); // hold for ~3 blocks
+                evOff.sampleOffset = (int32)(periodSize * 3);
                 evOff.ppqPosition = 0;
                 evOff.type = Event::kNoteOffEvent;
                 evOff.flags = Event::kIsLive;
@@ -820,10 +843,23 @@ int main (int argc, char* argv[])
         processData.inputEvents = eventList.get ();
         processData.outputEvents = nullptr;
 
+        // Parameter changes (none)
+        processData.inputParameterChanges = nullptr;
+        processData.outputParameterChanges = nullptr;
+
+        //--------------------------------------------------------------
+        // Zero output buffers before processing (avoid garbage)
+        //--------------------------------------------------------------
+        std::memset (audioBuf.data (), 0, periodSize * channels * sizeof (float));
+
         //--------------------------------------------------------------
         // Process audio
         //--------------------------------------------------------------
         tresult res = audioProcessor->process (processData);
+        if (res != kResultTrue)
+        {
+            std::cerr << "process() returned " << res << std::endl;
+        }
 
         //--------------------------------------------------------------
         // Write audio to ALSA
@@ -849,5 +885,4 @@ int main (int argc, char* argv[])
     audio.close ();
 
     return 0;
-}
 }
