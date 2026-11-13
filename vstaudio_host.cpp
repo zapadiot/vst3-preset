@@ -894,8 +894,11 @@ int main (int argc, char* argv[])
     //--------------------------------------------------------------
     // Cleanup
     //--------------------------------------------------------------
-    component->setActive (false);
-    component->terminate ();
+    if (component)
+    {
+        component->setActive (false);
+        component->terminate ();
+    }
     if (controller)
         controller->terminate ();
 

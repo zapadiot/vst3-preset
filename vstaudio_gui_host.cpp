@@ -1128,8 +1128,11 @@ int main (int argc, char* argv[])
         plugView = nullptr;
     }
     plugFrame = nullptr;
-    component->setActive (false);
-    component->terminate ();
+    if (component)
+    {
+        component->setActive (false);
+        component->terminate ();
+    }
     if (controller)
         controller->terminate ();
 
