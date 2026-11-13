@@ -21,12 +21,14 @@
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
+#include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/vstspeaker.h"
 #include "pluginterfaces/base/funknown.h"
 
 #include <alsa/asoundlib.h>
@@ -437,20 +439,6 @@ int main (int argc, char* argv[])
         return 1;
     }
 
-    // Initialize component with host context
-    if (component->initialize (&hostApp) != kResultTrue)
-    {
-        std::cerr << "vstaudio_host: failed to initialize component" << std::endl;
-        return 1;
-    }
-
-    // Initialize controller
-    if (controller->initialize (&hostApp) != kResultTrue)
-    {
-        std::cerr << "vstaudio_host: failed to initialize controller" << std::endl;
-        return 1;
-    }
-
     // Set component handler
     auto handler = owned (new HostComponentHandler ());
     controller->setComponentHandler (handler.get ());
@@ -474,7 +462,9 @@ int main (int argc, char* argv[])
         return 0;
     }
 
-    // Load snapshot if specified
+    // Load snapshot if specified. Keep the values so the processor receives
+    // them as an initial IParameterChanges block during the first process call.
+    std::vector<std::pair<ParamID, ParamValue>> loadedParams;
     if (!loadPath.empty ())
     {
         std::ifstream in (loadPath.c_str ());
@@ -502,6 +492,7 @@ int main (int argc, char* argv[])
                 if ((long long) info.id != id)
                     continue;
                 controller->setParamNormalized (info.id, (Vst::ParamValue) value);
+                loadedParams.emplace_back (info.id, (Vst::ParamValue) value);
                 ++loaded;
                 break;
             }
@@ -545,6 +536,14 @@ int main (int argc, char* argv[])
         std::cerr << "vstaudio_host: plug-in has no IAudioProcessor" << std::endl;
         return 1;
     }
+
+    // Explicitly select the plug-in's output arrangement before setup.
+    SpeakerArrangement outputArrangement = 0;
+    if (audioProcessor->getBusArrangement (kOutput, 0, outputArrangement) != kResultTrue)
+        outputArrangement = SpeakerArr::kStereo;
+    auto arrangementResult = audioProcessor->setBusArrangements (
+        nullptr, 0, &outputArrangement, 1);
+    std::cerr << "output arrangement result: " << arrangementResult << std::endl;
 
     // Setup processing
     ProcessSetup setup;
@@ -596,6 +595,19 @@ int main (int argc, char* argv[])
 
     // Event list for MIDI input
     auto eventList = owned (new HostEventList ());
+
+    // Deliver loaded snapshot values to the processor on the first block.
+    ParameterChanges initialParamChanges ((int32) loadedParams.size ());
+    for (const auto& change : loadedParams)
+    {
+        int32 queueIndex = -1;
+        if (auto* queue = initialParamChanges.addParameterData (change.first, queueIndex))
+        {
+            int32 pointIndex = -1;
+            queue->addPoint (0, change.second, pointIndex);
+        }
+    }
+    bool initialParamsPending = !loadedParams.empty ();
 
     // Active notes tracking
     std::map<uint16, ActiveNote> activeNotes;
@@ -844,7 +856,7 @@ int main (int argc, char* argv[])
         processData.outputEvents = nullptr;
 
         // Parameter changes (none)
-        processData.inputParameterChanges = nullptr;
+        processData.inputParameterChanges = initialParamsPending ? &initialParamChanges : nullptr;
         processData.outputParameterChanges = nullptr;
 
         //--------------------------------------------------------------
@@ -859,6 +871,12 @@ int main (int argc, char* argv[])
         if (res != kResultTrue)
         {
             std::cerr << "process() returned " << res << std::endl;
+        }
+
+        if (initialParamsPending)
+        {
+            initialParamChanges.clearQueue ();
+            initialParamsPending = false;
         }
 
         //--------------------------------------------------------------
