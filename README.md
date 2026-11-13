@@ -95,6 +95,12 @@ vstparam_host /path/to/Plugin.vst3 --save /tmp/preset.txt
 
 # Load a preset snapshot (applies values, then lists parameters)
 vstparam_host /path/to/Plugin.vst3 --load /tmp/preset.txt
+
+# Save a native instrument preset (plugin's own state blob, not the txt format)
+vstparam_host /path/to/Plugin.vst3 --set 0x4faae71a 0.75 --save-preset /tmp/preset.kPreset
+
+# Load a native instrument preset (controller state, falling back to component state)
+vstparam_host /path/to/Plugin.vst3 --load-preset /tmp/preset.kPreset
 ```
 
 **Output (list):**

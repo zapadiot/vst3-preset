@@ -6,6 +6,7 @@
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
+#include "public.sdk/source/common/memorystream.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -59,7 +61,8 @@ int main (int argc, char* argv[])
     if (argc < 2)
     {
         std::cerr << "usage: vstparam_host <path-to-vst3-or-bundle> [--set <id> <norm> ...]"
-                  << " [--save <file>] [--load <file>]" << std::endl;
+                  << " [--save <file>] [--load <file>] [--save-preset <file>] [--load-preset <file>]"
+                  << std::endl;
         return 2;
     }
 
@@ -68,6 +71,10 @@ int main (int argc, char* argv[])
     bool doLoad = false;
     std::string savePath;
     std::string loadPath;
+    bool doSavePreset = false;
+    std::string savePresetPath;
+    bool doLoadPreset = false;
+    std::string loadPresetPath;
     std::vector<std::pair<std::string, double>> setPairs;
     if (argc > 2)
     {
@@ -90,6 +97,18 @@ int main (int argc, char* argv[])
             {
                 doLoad = true;
                 loadPath = argv[i + 1];
+                i += 2;
+            }
+            else if (mode == "--save-preset" && i + 1 < argc)
+            {
+                doSavePreset = true;
+                savePresetPath = argv[i + 1];
+                i += 2;
+            }
+            else if (mode == "--load-preset" && i + 1 < argc)
+            {
+                doLoadPreset = true;
+                loadPresetPath = argv[i + 1];
                 i += 2;
             }
             else
@@ -138,6 +157,8 @@ int main (int argc, char* argv[])
             return 1;
         }
 
+        IComponent* component = plugProvider->getComponent ();
+
         std::cout << "plug-in: " << classInfo.name () << " | vendor: " << classInfo.vendor ()
                   << " | version: " << classInfo.version () << std::endl;
 
@@ -173,6 +194,44 @@ int main (int argc, char* argv[])
             }
         }
 
+        if (doSavePreset)
+        {
+            Steinberg::MemoryStream stateStream;
+            tresult stateRes = controller->getState (&stateStream);
+            if (stateRes != kResultTrue)
+            {
+                std::cerr << "vstparam_host: failed to get instrument preset state (controller) for '"
+                          << classInfo.name () << "' result=0x" << std::hex << stateRes
+                          << std::dec << " - trying component state" << std::endl;
+                stateRes = component->getState (&stateStream);
+                if (stateRes != kResultTrue)
+                {
+                    std::cerr << "vstparam_host: failed to get instrument preset state (component) for '"
+                              << classInfo.name () << "' result=0x" << std::hex << stateRes
+                              << std::dec << std::endl;
+                    controller->release ();
+                    return 1;
+                }
+            }
+            TSize presetSize = stateStream.getSize ();
+            const char* presetData = stateStream.getData ();
+            std::ofstream out (savePresetPath.c_str (), std::ios::binary);
+            if (!out.is_open ())
+            {
+                std::cerr << "vstparam_host: cannot open preset file '" << savePresetPath << "'"
+                          << std::endl;
+                controller->release ();
+                return 1;
+            }
+            out.write (presetData, (std::streamsize)presetSize);
+            out.close ();
+            std::cout << "saved instrument preset of " << classInfo.name () << " to "
+                      << savePresetPath << " (" << (long)presetSize << " bytes)"
+                      << std::endl;
+            controller->release ();
+            return 0;
+        }
+
         if (doSave)
         {
             std::ofstream out (savePath.c_str ());
@@ -203,6 +262,46 @@ int main (int argc, char* argv[])
                       << std::endl;
             controller->release ();
             return 0;
+        }
+
+        if (doLoadPreset)
+        {
+            std::ifstream in (loadPresetPath.c_str (), std::ios::binary);
+            if (!in.is_open ())
+            {
+                std::cerr << "vstparam_host: cannot open instrument preset file '"
+                          << loadPresetPath << "'" << std::endl;
+                controller->release ();
+                return 1;
+            }
+            std::vector<char> presetBytes ((std::istreambuf_iterator<char> (in)),
+                                           std::istreambuf_iterator<char> ());
+            Steinberg::MemoryStream stateStream (presetBytes.data (),
+                                                 (TSize)presetBytes.size ());
+            tresult stateRes = controller->setState (&stateStream);
+            if (stateRes != kResultTrue)
+            {
+                std::cerr << "vstparam_host: failed to set instrument preset state (controller) for '"
+                          << classInfo.name () << "' result=0x" << std::hex << stateRes
+                          << std::dec << " - trying component state" << std::endl;
+                stateStream.seek (0, IBStream::kIBSeekSet, nullptr);
+                stateRes = component->setState (&stateStream);
+                if (stateRes != kResultTrue)
+                {
+                    std::cerr << "vstparam_host: failed to set instrument preset state (component) for '"
+                              << classInfo.name () << "' result=0x" << std::hex << stateRes
+                              << std::dec << std::endl;
+                    controller->release ();
+                    return 1;
+                }
+                // Component state must also be handed to the edit controller so that
+                // the parameter values are reflected in the controller (VST3 spec).
+                stateStream.seek (0, IBStream::kIBSeekSet, nullptr);
+                controller->setComponentState (&stateStream);
+            }
+            std::cout << "loaded instrument preset of " << classInfo.name () << " from "
+                      << loadPresetPath << " (" << (long)presetBytes.size () << " bytes)"
+                      << std::endl;
         }
 
         if (doLoad)
