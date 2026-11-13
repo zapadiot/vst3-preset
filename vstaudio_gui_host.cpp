@@ -41,6 +41,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <cstdarg>
 #include <vector>
 #include <map>
 #include <cmath>
@@ -54,6 +55,22 @@
 
 using namespace Steinberg;
 using namespace Vst;
+
+//==============================================================================
+// Optional trace logging
+//==============================================================================
+static bool g_traceEnabled = false;
+
+static void traceLog (const char* fmt, ...)
+{
+    if (!g_traceEnabled)
+        return;
+    va_list ap;
+    va_start (ap, fmt);
+    vfprintf (stderr, fmt, ap);
+    va_end (ap);
+    fputc ('\n', stderr);
+}
 
 //==============================================================================
 // Minimal IComponentHandler
@@ -510,9 +527,10 @@ int main (int argc, char* argv[])
 {
     if (argc < 2)
     {
-        std::cerr << "usage: vstaudio_gui_host <path-to-vst3> [--load <snapshot>] [--list]" << std::endl;
+        std::cerr << "usage: vstaudio_gui_host <path-to-vst3> [--load <snapshot>] [--list] [--trace]" << std::endl;
         std::cerr << "  --load <file>   load preset snapshot before entering audio mode" << std::endl;
         std::cerr << "  --list          list parameters and exit" << std::endl;
+        std::cerr << "  --trace         enable verbose trace logging to stderr" << std::endl;
         return 2;
     }
 
@@ -535,6 +553,10 @@ int main (int argc, char* argv[])
         else if (arg == "--demo")
         {
             demoMode = true;
+        }
+        else if (arg == "--trace")
+        {
+            g_traceEnabled = true;
         }
     }
 
@@ -600,6 +622,8 @@ int main (int argc, char* argv[])
         return 1;
     }
 
+    traceLog ("trace: plugin ready");
+
     // Set component handler
     auto handler = owned (new HostComponentHandler ());
     controller->setComponentHandler (handler.get ());
@@ -656,6 +680,7 @@ int main (int argc, char* argv[])
     std::vector<std::pair<ParamID, ParamValue>> loadedParams;
     if (!loadPath.empty ())
     {
+        traceLog ("trace: load snapshot: %s", loadPath.c_str ());
         std::ifstream in (loadPath.c_str ());
         if (!in.is_open ())
         {
@@ -681,6 +706,7 @@ int main (int argc, char* argv[])
                 if ((long long) info.id != id)
                     continue;
                 controller->setParamNormalized (info.id, (Vst::ParamValue) value);
+                traceLog ("trace: snapshot set param id=0x%x value=%.4f", (unsigned)info.id, (double)value);
                 loadedParams.emplace_back (info.id, (Vst::ParamValue) value);
                 ++loaded;
                 break;
@@ -976,6 +1002,7 @@ int main (int argc, char* argv[])
                 default:
                 {
                     uint16 note = keyToNote (key);
+                    traceLog ("trace: key %c -> note %u", (char)key, (unsigned)note);
                     if (note != 255 && hasEventInput)
                     {
                         Event ev;
@@ -1016,6 +1043,7 @@ int main (int argc, char* argv[])
             {
                 demoGateCounter = 0;
                 int note = demoPattern[demoStep];
+                traceLog ("trace: demo note %d", note);
                 demoStep = (demoStep + 1) % demoPatternLen;
 
                 Event evOn;
@@ -1082,6 +1110,7 @@ int main (int argc, char* argv[])
         // Event input
         processData.inputEvents = eventList.get ();
         processData.outputEvents = nullptr;
+        traceLog ("trace: process block");
 
         // Parameter changes (none)
         processData.inputParameterChanges = initialParamsPending ? &initialParamChanges : nullptr;
